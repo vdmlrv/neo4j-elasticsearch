@@ -2,20 +2,19 @@ package org.neo4j.elasticsearch;
 
 import io.searchbox.client.JestClient;
 import io.searchbox.client.JestClientFactory;
-
-import org.neo4j.graphdb.GraphDatabaseService;
-import org.neo4j.kernel.lifecycle.LifecycleAdapter;
-
+import java.text.ParseException;
 import java.util.Map;
 import java.util.logging.Logger;
-import java.text.ParseException;
+import org.neo4j.dbms.api.DatabaseManagementService;
+import org.neo4j.kernel.lifecycle.LifecycleAdapter;
 
 /**
  * @author mh
  * @since 25.04.15
  */
 public class ElasticSearchExtension extends LifecycleAdapter {
-    private final GraphDatabaseService gds;
+
+    private final DatabaseManagementService dms;
     private final static Logger logger = Logger.getLogger(ElasticSearchExtension.class.getName());
     private final String hostName;
     private boolean enabled = true;
@@ -24,7 +23,8 @@ public class ElasticSearchExtension extends LifecycleAdapter {
     private JestClient client;
     private ElasticSearchIndexSettings indexSettings;
 
-    public ElasticSearchExtension(GraphDatabaseService gds, String hostName, String indexSpec, Boolean discovery, Boolean includeIDField, Boolean includeLabelsField) {
+    public ElasticSearchExtension(DatabaseManagementService dms, String hostName, String indexSpec,
+        Boolean discovery, Boolean includeIDField, Boolean includeLabelsField) {
         Map iSpec;
         try {
             iSpec = ElasticSearchIndexSpecParser.parseIndexSpec(indexSpec);
@@ -32,38 +32,44 @@ public class ElasticSearchExtension extends LifecycleAdapter {
                 logger.severe("ElasticSearch Integration: syntax error in index_spec");
                 enabled = false;
             }
-            this.indexSettings = new ElasticSearchIndexSettings(iSpec, includeIDField, includeLabelsField);
+            this.indexSettings = new ElasticSearchIndexSettings(iSpec, includeIDField,
+                includeLabelsField);
         } catch (ParseException e) {
             logger.severe("ElasticSearch Integration: Can't define index twice");
             enabled = false;
         }
         logger.info("Elasticsearch Integration: Running " + hostName + " - " + indexSpec);
-        this.gds = gds;
+        this.dms = dms;
         this.hostName = hostName;
         this.discovery = discovery;
     }
 
     @Override
-    public void init() throws Throwable {
-        if (!enabled) return;
+    public void init() throws Exception {
+        if (!enabled) {
+            return;
+        }
 
         client = getJestClient(hostName, discovery);
         handler = new ElasticSearchEventHandler(client, indexSettings);
-        gds.registerTransactionEventHandler(handler);
+        dms.registerTransactionEventListener("neo4j", handler);
         logger.info("Connecting to ElasticSearch");
     }
 
     @Override
-    public void shutdown() throws Throwable {
-        if (!enabled) return;
-        gds.unregisterTransactionEventHandler(handler);
-        client.shutdownClient();
+    public void shutdown() throws Exception {
+        if (!enabled) {
+            return;
+        }
+        dms.unregisterTransactionEventListener("neo4j", handler);
+        client.close();
         logger.info("Disconnected from ElasticSearch");
     }
 
-    private JestClient getJestClient(final String hostName, final Boolean discovery) throws Throwable {
-      JestClientFactory factory = new JestClientFactory();
-      factory.setHttpClientConfig(JestDefaultHttpConfigFactory.getConfigFor(hostName, discovery));
-      return factory.getObject();
+    private JestClient getJestClient(final String hostName, final Boolean discovery)
+        throws Exception {
+        JestClientFactory factory = new JestClientFactory();
+        factory.setHttpClientConfig(JestDefaultHttpConfigFactory.getConfigFor(hostName, discovery));
+        return factory.getObject();
     }
 }

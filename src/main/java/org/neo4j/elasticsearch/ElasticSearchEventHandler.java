@@ -8,25 +8,36 @@ import io.searchbox.core.Bulk;
 import io.searchbox.core.Delete;
 import io.searchbox.core.Index;
 import io.searchbox.core.Update;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Label;
 import org.neo4j.graphdb.Node;
+import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.event.LabelEntry;
 import org.neo4j.graphdb.event.PropertyEntry;
 import org.neo4j.graphdb.event.TransactionData;
-import org.neo4j.graphdb.event.TransactionEventHandler;
-
-import java.util.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import org.neo4j.graphdb.event.TransactionEventListener;
 
 /**
-* @author mh
-* @since 25.04.15
-*/
-class ElasticSearchEventHandler implements TransactionEventHandler<Collection<BulkableAction>>, JestResultHandler<JestResult> {
+ * @author mh
+ * @since 25.04.15
+ */
+class ElasticSearchEventHandler implements
+    TransactionEventListener<Collection<BulkableAction>>,
+    JestResultHandler<JestResult> {
+
     private final JestClient client;
-    private final static Logger logger = Logger.getLogger(ElasticSearchEventHandler.class.getName());
+    private final static Logger logger = Logger.getLogger(
+        ElasticSearchEventHandler.class.getName());
     private final ElasticSearchIndexSettings indexSettings;
     private final Set<String> indexLabels;
     private boolean useAsyncJest = true;
@@ -38,33 +49,43 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     }
 
     @Override
-    public Collection<BulkableAction> beforeCommit(TransactionData transactionData) throws Exception {
+    public Collection<BulkableAction> beforeCommit(
+        TransactionData data,
+        Transaction transaction,
+        GraphDatabaseService databaseService
+    ) throws Exception {
         Map<IndexId, BulkableAction> actions = new HashMap<>(1000);
 
-        for (Node node : transactionData.createdNodes()) {
-            if (hasLabel(node)) actions.putAll(indexRequests(node));
+        for (Node node : data.createdNodes()) {
+            if (hasLabel(node)) {
+                actions.putAll(indexRequests(node));
+            }
         }
-        for (LabelEntry labelEntry : transactionData.assignedLabels()) {
+        for (LabelEntry labelEntry : data.assignedLabels()) {
             if (hasLabel(labelEntry)) {
-                if (transactionData.isDeleted(labelEntry.node())) {
+                if (data.isDeleted(labelEntry.node())) {
                     actions.putAll(deleteRequests(labelEntry.node()));
                 } else {
                     actions.putAll(indexRequests(labelEntry.node()));
                 }
             }
         }
-        for (LabelEntry labelEntry : transactionData.removedLabels()) {
-            if (hasLabel(labelEntry)) actions.putAll(deleteRequests(labelEntry.node(), labelEntry.label()));
+        for (LabelEntry labelEntry : data.removedLabels()) {
+            if (hasLabel(labelEntry)) {
+                actions.putAll(deleteRequests(labelEntry.node(), labelEntry.label()));
+            }
         }
-        for (PropertyEntry<Node> propEntry : transactionData.assignedNodeProperties()) {
-            if (hasLabel(propEntry))
+        for (PropertyEntry<Node> propEntry : data.assignedNodeProperties()) {
+            if (hasLabel(propEntry)) {
                 actions.putAll(indexRequests(propEntry.entity()));
+            }
         }
-        for (PropertyEntry<Node> propEntry : transactionData.removedNodeProperties()) {
-            if (!transactionData.isDeleted(propEntry.entity()) && hasLabel(propEntry))
+        for (PropertyEntry<Node> propEntry : data.removedNodeProperties()) {
+            if (!data.isDeleted(propEntry.entity()) && hasLabel(propEntry)) {
                 actions.putAll(updateRequests(propEntry.entity()));
+            }
         }
-        return actions.isEmpty() ? Collections.<BulkableAction>emptyList() : actions.values();
+        return actions.isEmpty() ? Collections.emptyList() : actions.values();
     }
 
     public void setUseAsyncJest(boolean useAsyncJest) {
@@ -72,15 +93,20 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     }
 
     @Override
-    public void afterCommit(TransactionData transactionData, Collection<BulkableAction> actions) {
-        if (actions.isEmpty()) return;
+    public void afterCommit(
+        TransactionData data,
+        Collection<BulkableAction> actions,
+        GraphDatabaseService databaseService
+    ) {
+        if (actions.isEmpty()) {
+            return;
+        }
         try {
             Bulk bulk = new Bulk.Builder()
-                    .addAction(actions).build();
+                .addAction(actions).build();
             if (useAsyncJest) {
                 client.executeAsync(bulk, this);
-            }
-            else {
+            } else {
                 client.execute(bulk);
             }
         } catch (Exception e) {
@@ -89,8 +115,10 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     }
 
     private boolean hasLabel(Node node) {
-        for (Label l: node.getLabels()) {
-            if (indexLabels.contains(l.name())) return true;
+        for (Label l : node.getLabels()) {
+            if (indexLabels.contains(l.name())) {
+                return true;
+            }
         }
         return false;
     }
@@ -102,20 +130,23 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     private boolean hasLabel(PropertyEntry<Node> propEntry) {
         return hasLabel(propEntry.entity());
     }
-    
+
     private Map<IndexId, Index> indexRequests(Node node) {
         HashMap<IndexId, Index> reqs = new HashMap<>();
 
-        for (Label l: node.getLabels()) {
-            if (!indexLabels.contains(l.name())) continue;
+        for (Label l : node.getLabels()) {
+            if (!indexLabels.contains(l.name())) {
+                continue;
+            }
 
-            for (ElasticSearchIndexSpec spec: indexSettings.getIndexSpec().get(l.name())) {
+            for (ElasticSearchIndexSpec spec : indexSettings.getIndexSpec().get(l.name())) {
                 String id = id(node), indexName = spec.getIndexName();
-                reqs.put(new IndexId(indexName, id), new Index.Builder(nodeToJson(node, spec.getProperties()))
-                .type(l.name())
-                .index(indexName)
-                .id(id)
-                .build());
+                reqs.put(new IndexId(indexName, id),
+                    new Index.Builder(nodeToJson(node, spec.getProperties()))
+                        .type(l.name())
+                        .index(indexName)
+                        .id(id)
+                        .build());
             }
         }
         return reqs;
@@ -124,49 +155,53 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     private Map<IndexId, Delete> deleteRequests(Node node) {
         HashMap<IndexId, Delete> reqs = new HashMap<>();
 
-    	for (Label l: node.getLabels()) {
-    		if (!indexLabels.contains(l.name())) continue;
-    		for (ElasticSearchIndexSpec spec: indexSettings.getIndexSpec().get(l.name())) {
-    		    String id = id(node), indexName = spec.getIndexName();
-    			reqs.put(new IndexId(indexName, id),
-    			         new Delete.Builder(id).index(indexName).build());
-    		}
-    	}
-    	return reqs;
-    }
-    
-    private Map<IndexId, Delete> deleteRequests(Node node, Label label) {
-        HashMap<IndexId, Delete> reqs = new HashMap<>();
-
-        if (indexLabels.contains(label.name())) {
-            for (ElasticSearchIndexSpec spec: indexSettings.getIndexSpec().get(label.name())) {
+        for (Label l : node.getLabels()) {
+            if (!indexLabels.contains(l.name())) {
+                continue;
+            }
+            for (ElasticSearchIndexSpec spec : indexSettings.getIndexSpec().get(l.name())) {
                 String id = id(node), indexName = spec.getIndexName();
                 reqs.put(new IndexId(indexName, id),
-                         new Delete.Builder(id)
-                                   .index(indexName)
-                                   .type(label.name())
-                                   .build());
+                    new Delete.Builder(id).index(indexName).build());
             }
         }
         return reqs;
     }
-    
-    private Map<IndexId, Update> updateRequests(Node node) {
-    	HashMap<IndexId, Update> reqs = new HashMap<>();
-    	for (Label l: node.getLabels()) {
-    		if (!indexLabels.contains(l.name())) continue;
 
-    		for (ElasticSearchIndexSpec spec: indexSettings.getIndexSpec().get(l.name())) {
-    		    String id = id(node), indexName = spec.getIndexName();
-    			reqs.put(new IndexId(indexName, id),
-    			        new Update.Builder(nodeToJson(node, spec.getProperties()))
-                    			  .type(l.name())
-                    			  .index(spec.getIndexName())
-                    			  .id(id(node))
-                    			  .build());
-    		}
-    	}
-    	return reqs;
+    private Map<IndexId, Delete> deleteRequests(Node node, Label label) {
+        HashMap<IndexId, Delete> reqs = new HashMap<>();
+
+        if (indexLabels.contains(label.name())) {
+            for (ElasticSearchIndexSpec spec : indexSettings.getIndexSpec().get(label.name())) {
+                String id = id(node), indexName = spec.getIndexName();
+                reqs.put(new IndexId(indexName, id),
+                    new Delete.Builder(id)
+                        .index(indexName)
+                        .type(label.name())
+                        .build());
+            }
+        }
+        return reqs;
+    }
+
+    private Map<IndexId, Update> updateRequests(Node node) {
+        HashMap<IndexId, Update> reqs = new HashMap<>();
+        for (Label l : node.getLabels()) {
+            if (!indexLabels.contains(l.name())) {
+                continue;
+            }
+
+            for (ElasticSearchIndexSpec spec : indexSettings.getIndexSpec().get(l.name())) {
+                String id = id(node), indexName = spec.getIndexName();
+                reqs.put(new IndexId(indexName, id),
+                    new Update.Builder(nodeToJson(node, spec.getProperties()))
+                        .type(l.name())
+                        .index(spec.getIndexName())
+                        .id(id(node))
+                        .build());
+            }
+        }
+        return reqs;
     }
 
     private String id(Node node) {
@@ -174,25 +209,27 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     }
 
     private Map nodeToJson(Node node, Set<String> properties) {
-        Map<String,Object> json = new LinkedHashMap<>();
-        
-        if(indexSettings.getIncludeIDField()) 
-        	json.put("id", id(node));
-        
-        if(indexSettings.getIncludeLabelsField()) 
-        	json.put("labels", labels(node));
+        Map<String, Object> json = new LinkedHashMap<>();
+
+        if (indexSettings.getIncludeIDField()) {
+            json.put("id", id(node));
+        }
+
+        if (indexSettings.getIncludeLabelsField()) {
+            json.put("labels", labels(node));
+        }
 
         for (String prop : properties) {
-            if(node.hasProperty(prop)){
+            if (node.hasProperty(prop)) {
                 Object value = node.getProperty(prop);
                 json.put(prop, value);
             }
         }
         return json;
     }
-    
+
     private String[] labels(Node node) {
-        List<String> result=new ArrayList<>();
+        List<String> result = new ArrayList<>();
         for (Label label : node.getLabels()) {
             result.add(label.name());
         }
@@ -200,7 +237,12 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
     }
 
     @Override
-    public void afterRollback(TransactionData transactionData, Collection<BulkableAction> actions) {
+    public void afterRollback(
+        TransactionData data,
+        Collection<BulkableAction> actions,
+        GraphDatabaseService databaseService
+    ) {
+
     }
 
     @Override
@@ -214,11 +256,13 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
 
     @Override
     public void failed(Exception e) {
-        logger.log(Level.WARNING,"Problem Updating ElasticSearch ",e);
+        logger.log(Level.WARNING, "Problem Updating ElasticSearch ", e);
     }
-    
+
     private class IndexId {
+
         final String indexName, id;
+
         public IndexId(String indexName, String id) {
             this.indexName = indexName;
             this.id = id;
@@ -231,34 +275,42 @@ class ElasticSearchEventHandler implements TransactionEventHandler<Collection<Bu
             result = prime * result + getOuterType().hashCode();
             result = prime * result + ((id == null) ? 0 : id.hashCode());
             result = prime * result
-                    + ((indexName == null) ? 0 : indexName.hashCode());
+                + ((indexName == null) ? 0 : indexName.hashCode());
             return result;
         }
 
         @Override
         public boolean equals(Object obj) {
-            if (this == obj)
+            if (this == obj) {
                 return true;
-            if (obj == null)
+            }
+            if (obj == null) {
                 return false;
-            if (!(obj instanceof IndexId))
+            }
+            if (!(obj instanceof IndexId)) {
                 return false;
+            }
             IndexId other = (IndexId) obj;
-            if (!getOuterType().equals(other.getOuterType()))
+            if (!getOuterType().equals(other.getOuterType())) {
                 return false;
+            }
             if (id == null) {
-                if (other.id != null)
+                if (other.id != null) {
                     return false;
-            } else if (!id.equals(other.id))
+                }
+            } else if (!id.equals(other.id)) {
                 return false;
+            }
             if (indexName == null) {
-                if (other.indexName != null)
+                if (other.indexName != null) {
                     return false;
-            } else if (!indexName.equals(other.indexName))
+                }
+            } else if (!indexName.equals(other.indexName)) {
                 return false;
+            }
             return true;
         }
-        
+
         private ElasticSearchEventHandler getOuterType() {
             return ElasticSearchEventHandler.this;
         }
