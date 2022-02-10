@@ -1,5 +1,6 @@
 package org.neo4j.elasticsearch;
 
+import org.neo4j.annotations.service.ServiceProvider;
 import org.neo4j.configuration.Config;
 import org.neo4j.dbms.api.DatabaseManagementService;
 import org.neo4j.elasticsearch.ElasticSearchKernelExtensionFactory.Dependencies;
@@ -11,6 +12,7 @@ import org.neo4j.kernel.lifecycle.Lifecycle;
  * @author mh
  * @since 06.02.13
  */
+@ServiceProvider
 public class ElasticSearchKernelExtensionFactory extends ExtensionFactory<Dependencies> {
 
     public static final String SERVICE_NAME = "ELASTIC_SEARCH";
