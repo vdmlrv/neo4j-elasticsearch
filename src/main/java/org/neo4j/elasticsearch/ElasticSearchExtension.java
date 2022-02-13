@@ -3,6 +3,7 @@ package org.neo4j.elasticsearch;
 import io.searchbox.client.JestClient;
 import io.searchbox.client.JestClientFactory;
 import java.text.ParseException;
+import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
 import org.neo4j.dbms.api.DatabaseManagementService;
@@ -18,16 +19,25 @@ public class ElasticSearchExtension extends LifecycleAdapter {
     private final static Logger logger = Logger.getLogger(ElasticSearchExtension.class.getName());
     private final String hostName;
     private boolean enabled = true;
+    private boolean enableAutoIndex = true;
     private final boolean discovery;
-    private ElasticSearchEventHandler handler;
+    private ElasticSearchHandler handler;
+    private ElasticSearchEventListener listener;
     private JestClient client;
     private ElasticSearchIndexSettings indexSettings;
 
-    public ElasticSearchExtension(DatabaseManagementService dms, String hostName, String indexSpec,
-        Boolean discovery, Boolean includeIDField, Boolean includeLabelsField) {
-        Map iSpec;
+    public ElasticSearchExtension(
+        DatabaseManagementService dms,
+        String hostName,
+        String indexSpec,
+        Boolean discovery,
+        Boolean includeIDField,
+        Boolean includeLabelsField,
+        Boolean enabledAutoIndex
+    ) {
         try {
-            iSpec = ElasticSearchIndexSpecParser.parseIndexSpec(indexSpec);
+            Map<String, List<ElasticSearchIndexSpec>> iSpec = ElasticSearchIndexSpecParser.parseIndexSpec(
+                indexSpec);
             if (iSpec.size() == 0) {
                 logger.severe("ElasticSearch Integration: syntax error in index_spec");
                 enabled = false;
@@ -42,6 +52,7 @@ public class ElasticSearchExtension extends LifecycleAdapter {
         this.dms = dms;
         this.hostName = hostName;
         this.discovery = discovery;
+        this.enableAutoIndex = enabledAutoIndex;
     }
 
     @Override
@@ -51,8 +62,11 @@ public class ElasticSearchExtension extends LifecycleAdapter {
         }
 
         client = getJestClient(hostName, discovery);
-        handler = new ElasticSearchEventHandler(client, indexSettings);
-        dms.registerTransactionEventListener("neo4j", handler);
+        handler = ElasticSearchHandler.newInstance(client, indexSettings);
+        if (enableAutoIndex) {
+            listener = new ElasticSearchEventListener(handler);
+            dms.registerTransactionEventListener("neo4j", listener);
+        }
         logger.info("Connecting to ElasticSearch");
     }
 
@@ -61,7 +75,9 @@ public class ElasticSearchExtension extends LifecycleAdapter {
         if (!enabled) {
             return;
         }
-        dms.unregisterTransactionEventListener("neo4j", handler);
+        if (enableAutoIndex) {
+            dms.unregisterTransactionEventListener("neo4j", listener);
+        }
         client.close();
         logger.info("Disconnected from ElasticSearch");
     }

@@ -30,7 +30,8 @@ public class ElasticSearchKernelExtensionFactory extends ExtensionFactory<Depend
             config.get(ElasticSearchSettings.indexSpec),
             config.get(ElasticSearchSettings.discovery),
             config.get(ElasticSearchSettings.includeIDField),
-            config.get(ElasticSearchSettings.includeLabelsField));
+            config.get(ElasticSearchSettings.includeLabelsField),
+            config.get(ElasticSearchSettings.enableAutoIndex));
     }
 
     public interface Dependencies {

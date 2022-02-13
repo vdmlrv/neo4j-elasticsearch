@@ -2,7 +2,7 @@ package org.neo4j.elasticsearch;
 
 import static java.util.Arrays.asList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.neo4j.internal.helpers.collection.MapUtil.stringMap;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.searchbox.client.JestClient;
 import io.searchbox.client.JestClientFactory;
@@ -11,7 +11,6 @@ import io.searchbox.client.config.HttpClientConfig;
 import io.searchbox.core.Get;
 import io.searchbox.indices.CreateIndex;
 import io.searchbox.indices.DeleteIndex;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -21,16 +20,18 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import org.neo4j.dbms.api.DatabaseManagementService;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Label;
+import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
 
 @TestInstance(Lifecycle.PER_CLASS)
-public class ElasticSearchEventHandlerIntegrationTest {
+public class ElasticSearchEventListenerIntegrationTest {
 
-    public static final String LABEL = "MyLabel";
-    public static final String INDEX = "my_index";
-    public static final String INDEX_SPEC = INDEX + ":" + LABEL + "(foo)";
+    private static final String LABEL = "MyLabel";
+    private static final String INDEX = "my_index";
+    private static final String INDEX_SPEC = INDEX + ":" + LABEL + "(foo)";
+
     private Neo4j embeddedDatabaseServer;
     private GraphDatabaseService db;
     private DatabaseManagementService dms;
@@ -47,13 +48,11 @@ public class ElasticSearchEventHandlerIntegrationTest {
         embeddedDatabaseServer = Neo4jBuilders.newInProcessBuilder()
             .withConfig(ElasticSearchSettings.hostName, "http://localhost:9200")
             .withConfig(ElasticSearchSettings.indexSpec, INDEX_SPEC)
-            .withExtensionFactories(List.of(new ElasticSearchKernelExtensionFactory()))
             .withDisabledServer()
             .build();
 
         dms = embeddedDatabaseServer.databaseManagementService();
         db = embeddedDatabaseServer.defaultDatabaseService();
-
 
         // create index
         client.execute(new CreateIndex.Builder(INDEX).build());
@@ -72,7 +71,7 @@ public class ElasticSearchEventHandlerIntegrationTest {
     public void testAfterCommit() throws Exception {
         String id;
         try (Transaction tx = db.beginTx()) {
-            org.neo4j.graphdb.Node node = tx.createNode(Label.label(LABEL));
+            Node node = tx.createNode(Label.label(LABEL));
             id = String.valueOf(node.getId());
             node.setProperty("foo", "foobar");
             tx.commit();
@@ -82,7 +81,7 @@ public class ElasticSearchEventHandlerIntegrationTest {
 
         JestResult response = client.execute(new Get.Builder(INDEX, id).build());
 
-        assertEquals(true, response.isSucceeded(), "request failed " + response.getErrorMessage());
+        assertTrue(response.isSucceeded(), "request failed " + response.getErrorMessage());
         assertEquals(INDEX, response.getValue("_index"));
         assertEquals(id, response.getValue("_id"));
         assertEquals(LABEL, response.getValue("_type"));
@@ -91,5 +90,33 @@ public class ElasticSearchEventHandlerIntegrationTest {
         assertEquals(asList(LABEL), source.get("labels"));
         assertEquals(id, source.get("id"));
         assertEquals("foobar", source.get("foo"));
+    }
+
+    @Test
+    void testCreateMultipleNodes() throws Exception {
+        String[] ids = new String[2];
+        try (Transaction tx = db.beginTx()) {
+            for (int i = 0; i < 2; ++i) {
+                Node node = tx.createNode(Label.label(LABEL));
+                ids[i] = String.valueOf(node.getId());
+                node.setProperty("foo", "bar" + (i + 1));
+            }
+            tx.commit();
+        }
+        Thread.sleep(1000);
+
+        for (int i = 0; i < 2; ++i) {
+            JestResult response = client.execute(new Get.Builder(INDEX, ids[i]).build());
+
+            assertTrue(response.isSucceeded(), "request failed " + response.getErrorMessage());
+            assertEquals(INDEX, response.getValue("_index"));
+            assertEquals(ids[i], response.getValue("_id"));
+            assertEquals(LABEL, response.getValue("_type"));
+
+            Map source = response.getSourceAsObject(Map.class);
+            assertEquals(asList(LABEL), source.get("labels"));
+            assertEquals(ids[i], source.get("id"));
+            assertEquals("bar" + (i + 1), source.get("foo"));
+        }
     }
 }

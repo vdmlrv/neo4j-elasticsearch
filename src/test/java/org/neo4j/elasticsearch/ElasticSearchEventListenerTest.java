@@ -3,6 +3,7 @@ package org.neo4j.elasticsearch;
 import static java.util.Collections.singletonList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.searchbox.client.JestClient;
 import io.searchbox.client.JestClientFactory;
@@ -27,11 +28,12 @@ import org.neo4j.harness.Neo4j;
 import org.neo4j.harness.Neo4jBuilders;
 
 @TestInstance(Lifecycle.PER_CLASS)
-public class ElasticSearchEventHandlerTest {
+public class ElasticSearchEventListenerTest {
 
     public static final String INDEX = "test-index";
     public static final String LABEL = "Label";
-    private ElasticSearchEventHandler handler;
+    private ElasticSearchHandler handler;
+    private ElasticSearchEventListener listener;
     private ElasticSearchIndexSettings indexSettings;
     private Neo4j embeddedDatabaseServer;
     private GraphDatabaseService db;
@@ -60,9 +62,10 @@ public class ElasticSearchEventHandlerTest {
             ElasticSearchIndexSpecParser.parseIndexSpec(INDEX + ":" + LABEL + "(foo)");
         indexSettings = new ElasticSearchIndexSettings(indexSpec, true, true);
 
-        handler = new ElasticSearchEventHandler(client, indexSettings);
+        handler = ElasticSearchHandler.newInstance(client, indexSettings);
+        listener = new ElasticSearchEventListener(handler);
         handler.setUseAsyncJest(false); // don't use async Jest for testing
-        dms.registerTransactionEventListener(db.databaseName(), handler);
+        dms.registerTransactionEventListener(db.databaseName(), listener);
 
         // create index
         client.execute(new CreateIndex.Builder(INDEX).build());
@@ -74,7 +77,7 @@ public class ElasticSearchEventHandlerTest {
         client.execute(new DeleteIndex.Builder(INDEX).build());
         client.close();
 
-        dms.unregisterTransactionEventListener(db.databaseName(), handler);
+        dms.unregisterTransactionEventListener(db.databaseName(), listener);
         dms.shutdown();
         embeddedDatabaseServer.close();
     }
@@ -91,7 +94,7 @@ public class ElasticSearchEventHandlerTest {
 
     private void assertIndexCreation(JestResult response) throws java.io.IOException {
         client.execute(new Get.Builder(INDEX, id).build());
-        assertEquals(true, response.isSucceeded());
+        assertTrue(response.isSucceeded());
         assertEquals(INDEX, response.getValue("_index"));
         assertEquals(id, response.getValue("_id"));
         assertEquals(LABEL, response.getValue("_type"));
@@ -138,7 +141,7 @@ public class ElasticSearchEventHandlerTest {
         assertIndexCreation(response);
 
         Map source = response.getSourceAsObject(Map.class);
-        assertEquals(null, source.get("labels"));
+        assertNull(source.get("labels"));
         assertEquals(id, source.get("id"));
         assertEquals("bar", source.get("foo"));
     }
@@ -158,7 +161,7 @@ public class ElasticSearchEventHandlerTest {
         }
 
         response = client.execute(new Get.Builder(INDEX, id).type(LABEL).build());
-        assertEquals(true, response.isSucceeded());
+        assertTrue(response.isSucceeded());
         assertEquals(true, response.getValue("found"));
         assertEquals("quux", response.getSourceAsObject(Map.class).get("foo"));
     }

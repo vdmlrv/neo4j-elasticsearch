@@ -15,6 +15,7 @@
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <neo4j.version>${project.version}</neo4j.version>
+        <maven.test.skip>true</maven.test.skip>
     </properties>
 
     <licenses>
@@ -76,6 +77,13 @@
         <dependency>
             <groupId>org.neo4j.test</groupId>
             <artifactId>neo4j-harness</artifactId>
+            <version>${neo4j.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Used to send cypher statements to our procedure. -->
+            <groupId>org.neo4j.driver</groupId>
+            <artifactId>neo4j-java-driver</artifactId>
             <version>${neo4j.version}</version>
             <scope>test</scope>
         </dependency>

@@ -6,11 +6,12 @@ import io.searchbox.client.JestResult;
 import io.searchbox.client.JestResultHandler;
 import io.searchbox.core.Bulk;
 import io.searchbox.core.Delete;
+import io.searchbox.core.DocumentResult;
 import io.searchbox.core.Index;
 import io.searchbox.core.Update;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,120 +19,53 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Label;
 import org.neo4j.graphdb.Node;
-import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.event.LabelEntry;
 import org.neo4j.graphdb.event.PropertyEntry;
-import org.neo4j.graphdb.event.TransactionData;
-import org.neo4j.graphdb.event.TransactionEventListener;
 
-/**
- * @author mh
- * @since 25.04.15
- */
-class ElasticSearchEventHandler implements
-    TransactionEventListener<Collection<BulkableAction>>,
-    JestResultHandler<JestResult> {
+public class ElasticSearchHandler implements JestResultHandler<JestResult> {
 
-    private final JestClient client;
     private final static Logger logger = Logger.getLogger(
-        ElasticSearchEventHandler.class.getName());
+        ElasticSearchHandler.class.getName());
+
+    private static ElasticSearchHandler instance;
+
+    public static ElasticSearchHandler getInstance() {
+        return instance;
+    }
+
+    public static ElasticSearchHandler newInstance(
+        JestClient jestClient,
+        ElasticSearchIndexSettings indexSettings) {
+        instance = new ElasticSearchHandler(jestClient, indexSettings);
+        return instance;
+    }
+
+    private final JestClient jestClient;
     private final ElasticSearchIndexSettings indexSettings;
     private final Set<String> indexLabels;
+
     private boolean useAsyncJest = true;
 
-    public ElasticSearchEventHandler(JestClient client, ElasticSearchIndexSettings indexSettings) {
-        this.client = client;
+    private ElasticSearchHandler(
+        JestClient jestClient,
+        ElasticSearchIndexSettings indexSettings
+    ) {
+        this.jestClient = jestClient;
         this.indexSettings = indexSettings;
         this.indexLabels = indexSettings.getIndexSpec().keySet();
     }
 
-    @Override
-    public Collection<BulkableAction> beforeCommit(
-        TransactionData data,
-        Transaction transaction,
-        GraphDatabaseService databaseService
-    ) throws Exception {
-        Map<IndexId, BulkableAction> actions = new HashMap<>(1000);
-
-        for (Node node : data.createdNodes()) {
-            if (hasLabel(node)) {
-                actions.putAll(indexRequests(node));
-            }
-        }
-        for (LabelEntry labelEntry : data.assignedLabels()) {
-            if (hasLabel(labelEntry)) {
-                if (data.isDeleted(labelEntry.node())) {
-                    actions.putAll(deleteRequests(labelEntry.node()));
-                } else {
-                    actions.putAll(indexRequests(labelEntry.node()));
-                }
-            }
-        }
-        for (LabelEntry labelEntry : data.removedLabels()) {
-            if (hasLabel(labelEntry)) {
-                actions.putAll(deleteRequests(labelEntry.node(), labelEntry.label()));
-            }
-        }
-        for (PropertyEntry<Node> propEntry : data.assignedNodeProperties()) {
-            if (hasLabel(propEntry)) {
-                actions.putAll(indexRequests(propEntry.entity()));
-            }
-        }
-        for (PropertyEntry<Node> propEntry : data.removedNodeProperties()) {
-            if (!data.isDeleted(propEntry.entity()) && hasLabel(propEntry)) {
-                actions.putAll(updateRequests(propEntry.entity()));
-            }
-        }
-        return actions.isEmpty() ? Collections.emptyList() : actions.values();
-    }
-
-    public void setUseAsyncJest(boolean useAsyncJest) {
-        this.useAsyncJest = useAsyncJest;
-    }
-
-    @Override
-    public void afterCommit(
-        TransactionData data,
-        Collection<BulkableAction> actions,
-        GraphDatabaseService databaseService
-    ) {
-        if (actions.isEmpty()) {
-            return;
-        }
-        try {
-            Bulk bulk = new Bulk.Builder()
-                .addAction(actions).build();
-            if (useAsyncJest) {
-                client.executeAsync(bulk, this);
-            } else {
-                client.execute(bulk);
-            }
-        } catch (Exception e) {
-            logger.log(Level.WARNING, "Error updating ElasticSearch ", e);
+    public void index(Node node) throws IOException {
+        if (hasLabel(node)) {
+            Map<IndexId, BulkableAction<DocumentResult>> actions =
+                new HashMap<>(indexRequests(node));
+            execute(actions.values(), false);
         }
     }
 
-    private boolean hasLabel(Node node) {
-        for (Label l : node.getLabels()) {
-            if (indexLabels.contains(l.name())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasLabel(LabelEntry labelEntry) {
-        return indexLabels.contains(labelEntry.label().name());
-    }
-
-    private boolean hasLabel(PropertyEntry<Node> propEntry) {
-        return hasLabel(propEntry.entity());
-    }
-
-    private Map<IndexId, Index> indexRequests(Node node) {
+    public Map<IndexId, Index> indexRequests(Node node) {
         HashMap<IndexId, Index> reqs = new HashMap<>();
 
         for (Label l : node.getLabels()) {
@@ -152,7 +86,7 @@ class ElasticSearchEventHandler implements
         return reqs;
     }
 
-    private Map<IndexId, Delete> deleteRequests(Node node) {
+    public Map<IndexId, Delete> deleteRequests(Node node) {
         HashMap<IndexId, Delete> reqs = new HashMap<>();
 
         for (Label l : node.getLabels()) {
@@ -168,7 +102,7 @@ class ElasticSearchEventHandler implements
         return reqs;
     }
 
-    private Map<IndexId, Delete> deleteRequests(Node node, Label label) {
+    public Map<IndexId, Delete> deleteRequests(Node node, Label label) {
         HashMap<IndexId, Delete> reqs = new HashMap<>();
 
         if (indexLabels.contains(label.name())) {
@@ -184,7 +118,7 @@ class ElasticSearchEventHandler implements
         return reqs;
     }
 
-    private Map<IndexId, Update> updateRequests(Node node) {
+    public Map<IndexId, Update> updateRequests(Node node) {
         HashMap<IndexId, Update> reqs = new HashMap<>();
         for (Label l : node.getLabels()) {
             if (!indexLabels.contains(l.name())) {
@@ -204,11 +138,36 @@ class ElasticSearchEventHandler implements
         return reqs;
     }
 
+    public boolean hasLabel(Node node) {
+        for (Label l : node.getLabels()) {
+            if (indexLabels.contains(l.name())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean hasLabel(LabelEntry labelEntry) {
+        return indexLabels.contains(labelEntry.label().name());
+    }
+
+    public boolean hasLabel(PropertyEntry<Node> propEntry) {
+        return hasLabel(propEntry.entity());
+    }
+
     private String id(Node node) {
         return String.valueOf(node.getId());
     }
 
-    private Map nodeToJson(Node node, Set<String> properties) {
+    private List<String> labels(Node node) {
+        List<String> result = new ArrayList<>();
+        for (Label label : node.getLabels()) {
+            result.add(label.name());
+        }
+        return result;
+    }
+
+    private Map<String, Object> nodeToJson(Node node, Set<String> properties) {
         Map<String, Object> json = new LinkedHashMap<>();
 
         if (indexSettings.getIncludeIDField()) {
@@ -228,21 +187,23 @@ class ElasticSearchEventHandler implements
         return json;
     }
 
-    private String[] labels(Node node) {
-        List<String> result = new ArrayList<>();
-        for (Label label : node.getLabels()) {
-            result.add(label.name());
-        }
-        return result.toArray(new String[result.size()]);
+    public void setUseAsyncJest(boolean useAsyncJest) {
+        this.useAsyncJest = useAsyncJest;
     }
 
-    @Override
-    public void afterRollback(
-        TransactionData data,
-        Collection<BulkableAction> actions,
-        GraphDatabaseService databaseService
-    ) {
+    public void execute(Collection<BulkableAction<DocumentResult>> actions) throws IOException {
+        execute(actions, useAsyncJest);
+    }
 
+    public void execute(Collection<BulkableAction<DocumentResult>> actions, boolean useAsyncJest)
+        throws IOException {
+        Bulk bulk = new Bulk.Builder()
+            .addAction(actions).build();
+        if (useAsyncJest) {
+            jestClient.executeAsync(bulk, this);
+        } else {
+            jestClient.execute(bulk);
+        }
     }
 
     @Override
@@ -259,7 +220,7 @@ class ElasticSearchEventHandler implements
         logger.log(Level.WARNING, "Problem Updating ElasticSearch ", e);
     }
 
-    private class IndexId {
+    public class IndexId {
 
         final String indexName, id;
 
@@ -302,17 +263,14 @@ class ElasticSearchEventHandler implements
                 return false;
             }
             if (indexName == null) {
-                if (other.indexName != null) {
-                    return false;
-                }
-            } else if (!indexName.equals(other.indexName)) {
-                return false;
+                return other.indexName == null;
+            } else {
+                return indexName.equals(other.indexName);
             }
-            return true;
         }
 
-        private ElasticSearchEventHandler getOuterType() {
-            return ElasticSearchEventHandler.this;
+        private ElasticSearchHandler getOuterType() {
+            return ElasticSearchHandler.this;
         }
 
         @Override

@@ -22,5 +22,7 @@ public class ElasticSearchSettings implements SettingsDeclaration {
     public static Setting<Boolean> includeLabelsField = newBuilder(
         "elasticsearch.include_labels_field",
         BOOL, Boolean.TRUE).build();
+    public static Setting<Boolean> enableAutoIndex = newBuilder("elasticsearch.enable_auto_index",
+        BOOL, Boolean.TRUE).build();
     // todo settings for label, property, indexName
 }
